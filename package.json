@@ -1,0 +1,33 @@
+{
+  "name": "android-emu-cli",
+  "version": "1.0.0",
+  "description": "Консольная утилита для управления Android-эмуляторами (AVD)",
+  "engines": {
+    "node": "^20.17.0 || ^22.13.0 || >=23.5.0"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "type": "module",
+  "bin": {
+    "android-emu": "bin/cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Voold/android-emu-cli.git"
+  },
+  "homepage": "https://github.com/Voold/android-emu-cli#readme",
+  "bugs": {
+    "url": "https://github.com/Voold/android-emu-cli/issues"
+  },
+  "scripts": {
+    "start": "node bin/cli.js",
+    "test": "node --test"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "inquirer": "^14.0.2"
+  }
+}
