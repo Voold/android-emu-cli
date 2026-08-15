@@ -57,7 +57,13 @@ export function buildMitmArgs(config = {}) {
   if (config.sslInsecure) args.push('--ssl-insecure');
   if (config.blockGlobal === false) args.push('--set', 'block_global=false');
   if (config.verbosity > 0) args.push(`-${'v'.repeat(config.verbosity)}`);
-  args.push(...parseCliArgs(config.customArgs));
+  const customArgs = parseCliArgs(config.customArgs);
+  for (const arg of customArgs) {
+    if (arg === '--listen-port' || arg === '-p' || arg.startsWith('--listen-port=')) {
+      throw new SdkError('Произвольные аргументы не могут переопределять порт mitmproxy. Настройте порт через конфигурацию.');
+    }
+  }
+  args.push(...customArgs);
   return args;
 }
 

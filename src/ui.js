@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import inquirer from 'inquirer';
+import { prompt } from './prompt.js';
 
 export const ui = {
   header(text) {
@@ -9,15 +9,15 @@ export const ui = {
     console.log(chalk.gray(text));
   },
   success(text) {
-    console.log(chalk.green(`✔ ${text}`));
+    console.log(chalk.green(`Готово: ${text}`));
   },
   warn(text) {
-    console.log(chalk.yellow(`⚠ ${text}`));
+    console.log(chalk.yellow(`Внимание: ${text}`));
   },
   error(text) {
-    console.log(chalk.red(`✖ ${text}`));
+    console.log(chalk.red(`Ошибка: ${text}`));
   },
-  async pause(message = 'Нажмите Enter, чтобы продолжить…') {
-    await inquirer.prompt([{ type: 'input', name: '_continue', message }]);
+  async pause(message = 'Нажмите Enter, чтобы продолжить...') {
+    await prompt([{ type: 'input', name: '_continue', message }]);
   },
 };

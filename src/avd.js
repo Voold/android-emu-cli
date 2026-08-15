@@ -1,6 +1,23 @@
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
+import { SdkError } from './errors.js';
 import { run, runInteractive } from './sdk.js';
+
+/**
+ * Возвращает package ID системного образа из config.ini AVD. Старые AVD не
+ * всегда имеют запись в настройках утилиты, поэтому это только read-only
+ * fallback: неизвестный или отсутствующий путь даёт null.
+ */
+export function parseAvdSystemImagePackage(configText) {
+  if (typeof configText !== 'string') return null;
+  const value = configText.match(/^image\.sysdir\.1\s*=\s*(.+?)\s*$/m)?.[1]?.replace(/\\+$/g, '').replace(/\/+$/g, '');
+  if (!value) return null;
+  const parts = value.split('/').filter(Boolean);
+  if (parts.length !== 4 || parts[0] !== 'system-images' || !/^android-\d+$/i.test(parts[1])) return null;
+  if (!parts[2] || !parts[3]) return null;
+  return parts.join(';');
+}
 
 function parseAvdList(output) {
   const [validSection] = output.split('The following Android Virtual Devices could not be loaded:');
@@ -79,6 +96,16 @@ export function deleteAvd(name) {
 
 export function avdConfigPath(name) {
   return path.join(os.homedir(), '.android', 'avd', `${name}.avd`, 'config.ini');
+}
+
+export function readAvdSystemImagePackage(name, readFile = fs.readFileSync) {
+  const configPath = avdConfigPath(name);
+  try {
+    return parseAvdSystemImagePackage(readFile(configPath, 'utf8'));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw new SdkError(`Не удалось прочитать config.ini AVD "${name}": ${error.message}`);
+  }
 }
 
 export function openAvdConfig(name) {

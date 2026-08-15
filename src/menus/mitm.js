@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { ui } from '../ui.js';
+import { prompt } from '../prompt.js';
 import { selectMenu, checkNav, clearScreen, BACK } from '../menu.js';
 import {
   buildMitmArgs,
@@ -55,7 +55,7 @@ async function configureScripts(initialScripts = []) {
     }
 
     clearScreen();
-    const { scriptPath } = await inquirer.prompt([
+    const { scriptPath } = await prompt([
       {
         type: 'input',
         name: 'scriptPath',
@@ -73,7 +73,7 @@ async function configureScripts(initialScripts = []) {
 
 async function configureMitm(saved = {}) {
   const scripts = await configureScripts(saved.scripts);
-  const base = await inquirer.prompt([
+  const base = await prompt([
     {
       type: 'number',
       name: 'listenPort',
@@ -97,7 +97,7 @@ async function configureMitm(saved = {}) {
 
   let mode = base.modeType;
   if (mode === 'upstream') {
-    const upstream = await inquirer.prompt([
+    const upstream = await prompt([
       {
         type: 'input',
         name: 'url',
@@ -109,7 +109,7 @@ async function configureMitm(saved = {}) {
     mode = `upstream:${upstream.url.trim()}`;
   }
 
-  const { presets, verbosity, customArgs } = await inquirer.prompt([
+  const { presets, verbosity, customArgs } = await prompt([
     {
       type: 'checkbox',
       name: 'presets',
@@ -163,7 +163,7 @@ async function startMitm(config) {
     const suggestedPort = await findAvailablePort(config.listenPort + 1);
     clearScreen();
     ui.warn(`Порт ${config.listenPort} уже занят.`);
-    const { port } = await inquirer.prompt([
+    const { port } = await prompt([
       {
         type: 'number',
         name: 'port',
@@ -181,7 +181,7 @@ async function startMitm(config) {
   clearScreen();
   console.log(chalk.bold.cyan('Команда запуска') + '\n');
   console.log(commandPreview(config) + '\n');
-  const { confirmStart } = await inquirer.prompt([
+  const { confirmStart } = await prompt([
     { type: 'confirm', name: 'confirmStart', message: 'Сохранить настройки и запустить?', default: true },
   ]);
   if (!confirmStart) return;
@@ -222,7 +222,7 @@ export async function mitmMenu() {
     }
 
     clearScreen();
-    const { confirmed } = await inquirer.prompt([
+    const { confirmed } = await prompt([
       { type: 'confirm', name: 'confirmed', message: 'Сбросить сохранённые настройки mitmproxy?', default: false },
     ]);
     if (confirmed) {

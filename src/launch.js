@@ -32,27 +32,139 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
-export function buildTerminalScript(command, args, scriptPath) {
-  const shellCommand = [command, ...args].map(shellQuote).join(' ');
-  return `#!/bin/sh\nrm -f ${shellQuote(scriptPath)}\nexec ${shellCommand}\n`;
+function appleScriptString(value) {
+  return `"${String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')}"`;
 }
 
-export function launchCommandInTerminal(command, args, filePrefix = 'android-emu-cli') {
-  if (process.platform !== 'darwin') {
+function makeScriptPath(prefix, { scriptPath, tempDir = os.tmpdir(), now = Date.now, random = Math.random } = {}) {
+  if (scriptPath) return scriptPath;
+  const safePrefix = String(prefix).replace(/[^a-zA-Z0-9_.-]/g, '-');
+  return path.join(tempDir, `${safePrefix}-${now()}-${random().toString(36).slice(2)}.sh`);
+}
+
+function getTerminalDeps(deps = {}) {
+  return {
+    platform: deps.platform ?? process.platform,
+    writeFile: deps.writeFile ?? fs.writeFileSync,
+    removeFile: deps.removeFile ?? ((target) => fs.rmSync(target, { force: true })),
+    runAppleScript: deps.runAppleScript ?? ((script) => spawnSync('osascript', ['-e', script], { encoding: 'utf8' })),
+    ...deps,
+  };
+}
+
+function terminalError(message, result) {
+  const details = (result?.stderr || result?.stdout || result?.error?.message || '').trim();
+  return new SdkError(details ? `${message} ${details}` : message);
+}
+
+function writeTerminalScript(command, args, prefix, deps) {
+  if (deps.platform !== 'darwin') {
     throw new SdkError('Запуск в отдельном окне Terminal сейчас поддерживается только на macOS.');
   }
 
-  const scriptPath = path.join(
-    os.tmpdir(),
-    `${filePrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`
-  );
-  fs.writeFileSync(scriptPath, buildTerminalScript(command, args, scriptPath), { mode: 0o700 });
+  const scriptPath = makeScriptPath(prefix, deps);
+  deps.writeFile(scriptPath, buildTerminalScript(command, args, scriptPath, deps), { mode: 0o700 });
+  return scriptPath;
+}
 
-  const appleScriptCommand = `bash ${shellQuote(scriptPath)}`.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const result = spawnSync('osascript', ['-e', `tell application "Terminal" to do script "${appleScriptCommand}"`]);
-  if (result.error || result.status !== 0) {
-    throw new SdkError('Не удалось открыть новое окно Terminal.');
+export function buildTerminalScript(command, args, scriptPath, { pidMarkerPath } = {}) {
+  const shellCommand = [command, ...args].map(shellQuote).join(' ');
+  const markerLine = pidMarkerPath ? `printf '%s\\n' "$$" > ${shellQuote(pidMarkerPath)}\n` : '';
+  return `#!/bin/sh\nrm -f ${shellQuote(scriptPath)}\n${markerLine}exec ${shellCommand}\n`;
+}
+
+export function createTerminalWindow(command, args, prefix = 'android-emu-cli', dependencies) {
+  const deps = getTerminalDeps(dependencies);
+  const scriptPath = writeTerminalScript(command, args, prefix, deps);
+  const shellCommand = `bash ${shellQuote(scriptPath)}`;
+  const script = [
+    'tell application "Terminal"',
+    `set terminalTab to do script ${appleScriptString(shellCommand)}`,
+    'return (id of window of terminalTab) & ":" & (tty of terminalTab)',
+    'end tell',
+  ].join('\n');
+  const result = deps.runAppleScript(script);
+
+  if (result?.error || result?.status !== 0) {
+    try {
+      deps.removeFile(scriptPath);
+    } catch {
+      // Первичная ошибка AppleScript важнее уборки временного скрипта.
+    }
+    throw terminalError('Не удалось открыть новое окно Terminal.', result);
   }
+
+  const identifiers = String(result?.stdout || '').trim().match(/^(\d+):(.+)$/);
+  const tty = identifiers?.[2]?.trim();
+  if (!identifiers || Number(identifiers[1]) <= 0 || !tty) {
+    throw new SdkError('Terminal не вернул корректные идентификатор окна и TTY созданной вкладки.');
+  }
+  return { windowId: Number(identifiers[1]), tty };
+}
+
+export function openTerminalTab(windowId, command, args, prefix = 'android-emu-cli', dependencies) {
+  if (!Number.isInteger(windowId) || windowId <= 0) {
+    throw new SdkError('Некорректный идентификатор окна Terminal.');
+  }
+
+  const deps = getTerminalDeps(dependencies);
+  const scriptPath = writeTerminalScript(command, args, prefix, deps);
+  const shellCommand = `bash ${shellQuote(scriptPath)}`;
+  const script = [
+    'tell application "Terminal"',
+    `do script ${appleScriptString(shellCommand)} in window id ${windowId}`,
+    'end tell',
+  ].join('\n');
+  const result = deps.runAppleScript(script);
+  if (result?.error || result?.status !== 0) {
+    try {
+      deps.removeFile(scriptPath);
+    } catch {
+      // Первичная ошибка AppleScript важнее уборки временного скрипта.
+    }
+    throw terminalError(
+      `Окно Terminal с id ${windowId} недоступно. Запуск в другом окне отменён.`,
+      result
+    );
+  }
+}
+
+export function readTerminalTabOutput(windowId, tty, dependencies) {
+  if (!Number.isInteger(windowId) || windowId <= 0 || !String(tty || '').trim()) {
+    throw new SdkError('Некорректный идентификатор окна или TTY вкладки Terminal.');
+  }
+
+  const deps = getTerminalDeps(dependencies);
+  if (deps.platform !== 'darwin') {
+    throw new SdkError('Чтение вывода Terminal сейчас поддерживается только на macOS.');
+  }
+  const script = [
+    'tell application "Terminal"',
+    `if not (exists window id ${windowId}) then error "Окно Terminal не найдено"`,
+    'set matchedTab to missing value',
+    `repeat with candidateTab in tabs of window id ${windowId}`,
+    `if (tty of candidateTab) is ${appleScriptString(tty)} then`,
+    'set matchedTab to candidateTab',
+    'exit repeat',
+    'end if',
+    'end repeat',
+    'if matchedTab is missing value then error "Вкладка Terminal с указанным TTY не найдена"',
+    'return contents of matchedTab',
+    'end tell',
+  ].join('\n');
+  const result = deps.runAppleScript(script);
+  if (result?.error || result?.status !== 0) {
+    throw terminalError(`Не удалось прочитать вывод вкладки Terminal ${tty}.`, result);
+  }
+  return String(result?.stdout || '').trim();
+}
+
+export function launchCommandInTerminal(command, args, filePrefix = 'android-emu-cli') {
+  createTerminalWindow(command, args, filePrefix);
 }
 
 /**

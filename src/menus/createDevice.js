@@ -1,11 +1,14 @@
-import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { spinner } from '../spinner.js';
 import { ui } from '../ui.js';
 import { listDeviceDefinitions, createAvd, listAvds } from '../avd.js';
 import { listSystemImages, installSystemImage, filterRecommendedImages } from '../images.js';
-import { launchEmulator } from '../launch.js';
-import { selectMenu, checkNav, clearScreen, BACK } from '../menu.js';
+import { classifySystemImage, formatMitmCapabilityLabel } from '../imageCapabilities.js';
+import { setLaunchDefaults } from '../launchDefaults.js';
+import { createAvdWithMetadata } from '../avdLifecycle.js';
+import { launchDevice } from './myDevices.js';
+import { prompt } from '../prompt.js';
+import { selectMenu, checkNav, clearScreen, BACK, GoToMainMenu } from '../menu.js';
 
 async function pickDeviceProfile() {
   const mode = checkNav(
@@ -14,18 +17,18 @@ async function pickDeviceProfile() {
       choices: [
         { name: 'Выбрать из списка', value: 'list' },
         { name: 'Ввести вручную', value: 'manual' },
-        { name: 'Без профиля (авто)', value: 'none' },
       ],
     })
   );
 
   if (mode === BACK) return BACK;
-  if (mode === 'none') return null;
-
   if (mode === 'manual') {
     clearScreen();
-    const { customDevice } = await inquirer.prompt([
-      { type: 'input', name: 'customDevice', message: 'Введите ID устройства (например pixel_6):' },
+    const { customDevice } = await prompt([
+      {
+        type: 'input', name: 'customDevice', message: 'Введите ID устройства (например pixel_6):',
+        validate: (value) => value.trim() !== '' || 'Введите ID устройства',
+      },
     ]);
     return customDevice.trim() || null;
   }
@@ -55,10 +58,11 @@ async function pickDeviceProfile() {
 }
 
 function imageChoice(img) {
+  const mitmLabel = formatMitmCapabilityLabel(classifySystemImage(img.package));
   return {
-    name: `${img.installed ? '◆' : '◇'} Android API ${img.apiLevel} — ${img.tag}/${img.abi}${
+    name: `${img.installed ? '◆' : '◇'} Android API ${img.apiLevel} — ${img.tag}/${img.abi} — ${img.installed ? 'установлен' : 'не установлен'}${
       img.description ? '  ' + chalk.gray(img.description) : ''
-    }`,
+    }  ${chalk.gray(mitmLabel)}`,
     value: img.package,
   };
 }
@@ -79,7 +83,7 @@ async function pickSystemImage() {
 
   if (mode === 'manual') {
     clearScreen();
-    const { customPackage } = await inquirer.prompt([
+    const { customPackage } = await prompt([
       {
         type: 'input',
         name: 'customPackage',
@@ -111,7 +115,6 @@ async function pickSystemImage() {
 
   while (true) {
     const choices = [
-      { separator: true, name: '◆ установлен   ◇ не установлен (потребуется загрузка)' },
       ...pool.map(imageChoice),
       ...(showingAll ? [] : [{ name: `Показать все образы (${images.length})`, value: '__show_all__' }]),
     ];
@@ -139,7 +142,7 @@ export async function createDeviceMenu() {
 
   if (!installed) {
     clearScreen();
-    const { confirmInstall } = await inquirer.prompt([
+    const { confirmInstall } = await prompt([
       {
         type: 'confirm',
         name: 'confirmInstall',
@@ -168,7 +171,7 @@ export async function createDeviceMenu() {
   }
 
   clearScreen();
-  const { name } = await inquirer.prompt([
+  const { name } = await prompt([
     {
       type: 'input',
       name: 'name',
@@ -187,24 +190,31 @@ export async function createDeviceMenu() {
   const trimmedName = name.trim();
 
   const sp = spinner(`Создаю устройство "${trimmedName}"...`);
+  let creation;
   try {
-    createAvd({ name: trimmedName, systemImagePackage: imagePackage, deviceId });
-    sp.succeed(`Устройство "${trimmedName}" создано.`);
+    creation = createAvdWithMetadata({ name: trimmedName, systemImagePackage: imagePackage, deviceId }, {
+      create: createAvd,
+      saveMetadata: (name, metadata) => setLaunchDefaults(name, metadata),
+    });
   } catch (err) {
     sp.fail('Не удалось создать устройство.');
     ui.error(err.message);
     await ui.pause();
     return;
   }
+  sp.succeed(`Устройство "${trimmedName}" создано.`);
+  if (creation.metadataWarning) {
+    ui.warn(`Не удалось сохранить metadata запуска: ${creation.metadataWarning.message}. При запуске будет прочитан config.ini AVD.`);
+  }
 
-  const { launchNow } = await inquirer.prompt([
+  const { launchNow } = await prompt([
     { type: 'confirm', name: 'launchNow', message: 'Запустить его прямо сейчас?', default: false },
   ]);
   if (launchNow) {
     try {
-      launchEmulator(['-avd', trimmedName]);
-      ui.success('Эмулятор запускается в новом окне Terminal.');
+      await launchDevice(trimmedName, { parsedSystemImagePackage: imagePackage });
     } catch (err) {
+      if (err instanceof GoToMainMenu) throw err;
       ui.error(err.message);
     }
   }

@@ -1,0 +1,6 @@
+id=android_emu_ca
+name=Android Emulator public CA
+version=1.0.0
+versionCode=1
+author=android-emu-cli
+description=Public Yandex and mitmproxy CA certificates for Android Emulator

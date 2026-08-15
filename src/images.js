@@ -1,5 +1,6 @@
 import { run, runInteractive } from './sdk.js';
 import { SdkError } from './errors.js';
+import { sortImagesForMitm } from './imageCapabilities.js';
 
 // Используется, если sdkmanager недоступен (нет сети, не приняты лицензии и т.п.)
 const FALLBACK_IMAGES = [
@@ -42,7 +43,7 @@ export function listSystemImages() {
   try {
     output = run('sdkmanager', ['--list']);
   } catch {
-    return { images: FALLBACK_IMAGES, usedFallback: true };
+    return { images: sortImagesForMitm(FALLBACK_IMAGES), usedFallback: true };
   }
 
   const availableIdx = output.indexOf('Available Packages:');
@@ -61,9 +62,9 @@ export function listSystemImages() {
   };
   const images = [...merged.values()].sort((a, b) => levelSortKey(b.apiLevel) - levelSortKey(a.apiLevel));
   if (images.length === 0) {
-    return { images: FALLBACK_IMAGES, usedFallback: true };
+    return { images: sortImagesForMitm(FALLBACK_IMAGES), usedFallback: true };
   }
-  return { images, usedFallback: false };
+  return { images: sortImagesForMitm(images), usedFallback: false };
 }
 
 const HOST_ABI = { arm64: 'arm64-v8a', x64: 'x86_64' }[process.arch];

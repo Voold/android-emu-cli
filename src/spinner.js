@@ -5,10 +5,10 @@ import chalk from 'chalk';
 // печатаем обычный статус вместо спиннера (заодно избегаем целого класса
 // багов, связанных с перерисовкой в нестандартных терминалах).
 export function spinner(text) {
-  console.log(chalk.gray(`… ${text}`));
+  console.log(chalk.gray(`Статус: ${text}`));
   return {
-    succeed: (msg) => console.log(chalk.green(`✔ ${msg || text}`)),
-    fail: (msg) => console.log(chalk.red(`✖ ${msg || text}`)),
-    warn: (msg) => console.log(chalk.yellow(`⚠ ${msg || text}`)),
+    succeed: (msg) => console.log(chalk.green(`Готово: ${msg || text}`)),
+    fail: (msg) => console.log(chalk.red(`Ошибка: ${msg || text}`)),
+    warn: (msg) => console.log(chalk.yellow(`Внимание: ${msg || text}`)),
   };
 }

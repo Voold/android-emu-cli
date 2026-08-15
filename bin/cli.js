@@ -7,6 +7,7 @@ import { myDevicesMenu } from '../src/menus/myDevices.js';
 import { createDeviceMenu } from '../src/menus/createDevice.js';
 import { devToolsMenu } from '../src/menus/devTools.js';
 import { mitmMenu } from '../src/menus/mitm.js';
+import { runDoctor } from '../src/doctor.js';
 
 async function mainMenu() {
   while (true) {
@@ -50,25 +51,29 @@ async function mainMenu() {
   clearScreen();
 }
 
-try {
-  assertSdkAvailable();
-} catch (err) {
-  ui.error(err.message);
-  process.exit(1);
-}
+if (process.argv[2] === 'doctor') {
+  process.exitCode = runDoctor();
+} else {
+  try {
+    assertSdkAvailable();
+  } catch (err) {
+    ui.error(err.message);
+    process.exit(1);
+  }
 
-process.on('SIGINT', () => {
-  clearScreen();
-  console.log('\nПрервано пользователем.');
-  process.exit(0);
-});
-
-mainMenu().catch((err) => {
-  if (err?.name === 'ExitPromptError') {
+  process.on('SIGINT', () => {
     clearScreen();
     console.log('\nПрервано пользователем.');
     process.exit(0);
-  }
-  ui.error(`Фатальная ошибка: ${err.message}`);
-  process.exit(1);
-});
+  });
+
+  mainMenu().catch((err) => {
+    if (err?.name === 'ExitPromptError') {
+      clearScreen();
+      console.log('\nПрервано пользователем.');
+      process.exit(0);
+    }
+    ui.error(`Фатальная ошибка: ${err.message}`);
+    process.exit(1);
+  });
+}

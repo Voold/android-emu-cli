@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "certificates": [
+    {
+      "id": "yandex-root",
+      "file": "RootCA.pem",
+      "source": "https://storage.yandexcloud.net/cloud-certs/RootCA.pem",
+      "fileSha256": "f452434eba62a3704c8b43c229440f2cb4887a6a197777de84c3d6f9cf5afd67",
+      "fingerprintSha256": "E3:C3:19:26:46:53:6B:C4:FF:AE:6D:D3:43:24:EF:9D:D8:D3:B1:6D:FA:13:A2:4E:13:18:0E:F1:4B:A2:1B:BA",
+      "subject": "CN=YandexInternalRootCA",
+      "validTo": "2033-02-11T13:51:42.000Z"
+    },
+    {
+      "id": "yandex-intermediate",
+      "file": "IntermediateCA.pem",
+      "source": "https://storage.yandexcloud.net/cloud-certs/IntermediateCA.pem",
+      "fileSha256": "c6a8224db5f1dbd2bb62329362e466fc5952934c80d8ab21fdbb2ce36d94d989",
+      "fingerprintSha256": "E1:D5:3D:D1:D7:56:6D:0D:C6:91:C9:ED:6F:CA:0C:91:0F:58:B9:5D:4E:D7:F0:A9:58:AC:C7:67:A1:B2:49:37",
+      "subject": "DC=ru\nDC=yandex\nDC=ld\nCN=YandexCLCA",
+      "validTo": "2027-06-20T16:54:37.000Z"
+    }
+  ]
+}

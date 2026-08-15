@@ -7,7 +7,10 @@
   },
   "files": [
     "bin",
-    "src"
+    "src",
+    "certs",
+    "assets",
+    "install.sh"
   ],
   "type": "module",
   "bin": {

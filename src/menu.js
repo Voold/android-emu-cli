@@ -28,9 +28,18 @@ const FOOTER = chalk.gray('↑↓ навигация   ⏎ выбрать   ← 
 // Заголовок и подсказки — единственное, что зафиксировано всегда. Индикаторы
 // прокрутки показываются, только если список реально длиннее экрана; под них
 // с запасом резервируем 2 строки при расчёте видимой области.
-const CHROME_LINES = 7;
+const CHROME_LINES = 8;
 const MIN_VISIBLE = 3;
-const DEFAULT_TERMINAL_ROWS = 24;
+const DEFAULT_TERMINAL_ROWS = 9;
+
+export function getScrollIndicators({ choicesLength, visibleCount, scrollOffset }) {
+  const show = choicesLength > visibleCount;
+  return {
+    show,
+    above: show ? scrollOffset : 0,
+    below: show ? Math.max(0, choicesLength - (scrollOffset + visibleCount)) : 0,
+  };
+}
 
 function exitProgram() {
   clearScreen();
@@ -72,8 +81,9 @@ export function selectMenu({ title, choices }) {
     if (scrollOffset > maxOffset) scrollOffset = maxOffset;
     if (scrollOffset < 0) scrollOffset = 0;
 
-    if (scrollOffset > 0) {
-      console.log(chalk.gray(`▲ ещё ${scrollOffset} выше`));
+    const indicators = getScrollIndicators({ choicesLength: choices.length, visibleCount: count, scrollOffset });
+    if (indicators.show) {
+      console.log(chalk.gray(`▲ ещё ${indicators.above} выше`));
     }
 
     const visible = choices.slice(scrollOffset, scrollOffset + count);
@@ -83,12 +93,11 @@ export function selectMenu({ title, choices }) {
         continue;
       }
       const isActive = choice === selectable[cursor];
-      console.log(`${isActive ? chalk.cyan('❯') : ' '} ${choice.name}`);
+      console.log(`${isActive ? chalk.cyan('>') : ' '} ${choice.name}`);
     }
 
-    const below = Math.max(0, choices.length - (scrollOffset + count));
-    if (below > 0) {
-      console.log(chalk.gray(`▼ ещё ${below} ниже`));
+    if (indicators.show) {
+      console.log(chalk.gray(`▼ ещё ${indicators.below} ниже`));
     }
 
     console.log();
