@@ -3,7 +3,7 @@ import { spinner } from '../spinner.js';
 import { ui } from '../ui.js';
 import { listDeviceDefinitions, createAvd, listAvds } from '../avd.js';
 import { listSystemImages, installSystemImage, filterRecommendedImages } from '../images.js';
-import { classifySystemImage, formatMitmCapabilityLabel } from '../imageCapabilities.js';
+import { classifySystemImage } from '../imageCapabilities.js';
 import { setLaunchDefaults } from '../launchDefaults.js';
 import { createAvdWithMetadata } from '../avdLifecycle.js';
 import { launchDevice } from './myDevices.js';
@@ -62,12 +62,10 @@ async function pickDeviceProfile() {
   return deviceId;
 }
 
-function imageChoice(img) {
-  const mitmLabel = formatMitmCapabilityLabel(classifySystemImage(img.package));
+export function imageChoice(img) {
+  const capability = classifySystemImage(img.package);
   return {
-    name: `${img.installed ? '◆' : '◇'} Android API ${img.apiLevel} — ${img.tag}/${img.abi} — ${img.installed ? 'установлен' : 'не установлен'}${
-      img.description ? '  ' + chalk.gray(img.description) : ''
-    }  ${chalk.gray(mitmLabel)}`,
+    name: `${img.installed ? '◆' : '◇'} API ${img.apiLevel}  ${img.tag}/${img.abi}  ${img.installed ? 'установлен' : 'не установлен'}  ${capability}`,
     value: img.package,
   };
 }
