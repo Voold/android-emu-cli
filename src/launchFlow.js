@@ -1,5 +1,6 @@
 import { buildLaunchArgs } from './launch.js';
 import { classifySystemImage } from './imageCapabilities.js';
+import { findRunningMitm } from './mitm.js';
 import { resolveMitmEnabled } from './settings.js';
 
 function withoutManualProxy(selectedFlagValues = []) {
@@ -48,6 +49,15 @@ export function resolveParameterizedLaunch({ globalSettings, avdSettings, select
   return { mitmEnabled, needsManualProxy: selectedFlagValues.includes('proxy') && !mitmEnabled, oneOffMitm };
 }
 
+export async function resolveMitmRuntime({ mitmEnabled, configuredPort }, dependencies = {}) {
+  if (!mitmEnabled) return { mode: 'direct' };
+  const find = dependencies.findRunningMitm ?? findRunningMitm;
+  const existingMitm = find(configuredPort);
+  if (existingMitm) return { mode: 'reuse', existingMitm };
+  const shouldStart = await dependencies.confirmStart();
+  return { mode: shouldStart ? 'start' : 'direct' };
+}
+
 export function getLaunchRecovery(stage, errorMessage = '') {
   const emulatorMayBeRunning = ['emulator', 'serial', 'boot', 'provision', 'ready'].includes(stage)
     || /\b(?:avd|emulator)\b.*(?:уже запущен|already running)|(?:уже запущен|already running).*\b(?:avd|emulator)\b/iu.test(errorMessage);
@@ -61,6 +71,14 @@ export function getLaunchRecoveryWarning(recovery) {
   return recovery?.emulatorMayBeRunning
     ? 'Эмулятор мог успеть запуститься. Закройте AVD и запустите заново из меню.'
     : null;
+}
+
+export function formatLaunchRecoveryTitle(errorMessage, warning) {
+  const error = String(errorMessage || '').trim();
+  const parts = ['Восстановление запуска'];
+  if (error) parts.push(`Ошибка:\n${error}`);
+  if (warning) parts.push(`Внимание:\n${String(warning).trim()}`);
+  return parts.join('\n\n');
 }
 
 export function formatProvisionResult(result = {}, capability) {

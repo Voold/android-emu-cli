@@ -19,6 +19,27 @@ export function parseAvdSystemImagePackage(configText) {
   return parts.join(';');
 }
 
+export function setAvdKeyboardEnabled(configText) {
+  const text = String(configText ?? '');
+  const newline = text.includes('\r\n') ? '\r\n' : text.includes('\n') ? '\n' : text.includes('\r') ? '\r' : '\n';
+  const hasFinalNewline = /(?:\r\n|\n|\r)$/.test(text);
+  const lines = text.split(/\r\n|\n|\r/);
+  if (hasFinalNewline) lines.pop();
+
+  let keyboardSettingFound = false;
+  const updatedLines = [];
+  for (const line of lines) {
+    if (/^\s*hw\.keyboard\s*=/.test(line)) {
+      if (!keyboardSettingFound) updatedLines.push('hw.keyboard=yes');
+      keyboardSettingFound = true;
+    } else {
+      updatedLines.push(line);
+    }
+  }
+  if (!keyboardSettingFound) updatedLines.push('hw.keyboard=yes');
+  return updatedLines.join(newline) + (hasFinalNewline ? newline : '');
+}
+
 function parseAvdList(output) {
   const [validSection] = output.split('The following Android Virtual Devices could not be loaded:');
   const blocks = validSection
@@ -82,20 +103,74 @@ export function listDeviceDefinitions() {
   return parseDeviceDefinitions(output);
 }
 
-export function createAvd({ name, systemImagePackage, deviceId }) {
+export function createAvd(
+  { name, systemImagePackage, deviceId },
+  { execute = run, configPath = avdConfigPath(name) } = {}
+) {
   const args = ['create', 'avd', '-n', name, '-k', systemImagePackage];
   if (deviceId) args.push('-d', deviceId);
   // avdmanager иногда спрашивает "Do you wish to create a custom hardware
   // profile? [no]" — отвечаем по умолчанию, чтобы не зависнуть на stdin.
-  run('avdmanager', args, { input: '\n' });
+  execute('avdmanager', args, { input: '\n' });
+  try {
+    enableAvdKeyboard(name, { configPath });
+  } catch (error) {
+    const partialError = new SdkError(
+      `AVD "${name}" создан, но включить ввод с клавиатуры не удалось. `
+      + `Откройте ${configPath} и установите hw.keyboard=yes либо удалите AVD и создайте его повторно. `
+      + `Причина: ${error.message}`
+    );
+    partialError.avdCreated = true;
+    partialError.cause = error;
+    throw partialError;
+  }
 }
 
 export function deleteAvd(name) {
   run('avdmanager', ['delete', 'avd', '-n', name]);
 }
 
-export function avdConfigPath(name) {
-  return path.join(os.homedir(), '.android', 'avd', `${name}.avd`, 'config.ini');
+export function avdConfigPath(
+  name,
+  { environment = process.env, homeDirectory = os.homedir() } = {}
+) {
+  const explicitAvdHome = String(environment.ANDROID_AVD_HOME || '').trim();
+  const emulatorHome = String(environment.ANDROID_EMULATOR_HOME || '').trim();
+  const userHome = String(environment.ANDROID_USER_HOME || '').trim();
+  const avdHome = explicitAvdHome || path.join(
+    emulatorHome || userHome || path.join(homeDirectory, '.android'),
+    'avd'
+  );
+  return path.join(avdHome, `${name}.avd`, 'config.ini');
+}
+
+export function enableAvdKeyboard(
+  name,
+  { configPath = avdConfigPath(name), fileSystem = fs } = {}
+) {
+  let temporaryPath = null;
+  try {
+    const current = fileSystem.readFileSync(configPath, 'utf8');
+    const updated = setAvdKeyboardEnabled(current);
+    if (updated === current) return false;
+
+    temporaryPath = path.join(
+      path.dirname(configPath),
+      `.${path.basename(configPath)}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`
+    );
+    fileSystem.writeFileSync(temporaryPath, updated, { encoding: 'utf8', mode: fileSystem.statSync(configPath).mode });
+    fileSystem.renameSync(temporaryPath, configPath);
+    temporaryPath = null;
+    return true;
+  } catch (error) {
+    throw new SdkError(`Не удалось включить ввод с клавиатуры для AVD "${name}" через config.ini: ${error.message}`);
+  } finally {
+    if (temporaryPath) {
+      try {
+        if (fileSystem.existsSync(temporaryPath)) fileSystem.unlinkSync(temporaryPath);
+      } catch { /* основной SdkError важнее ошибки cleanup */ }
+    }
+  }
 }
 
 export function readAvdSystemImagePackage(name, readFile = fs.readFileSync) {

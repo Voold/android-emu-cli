@@ -53,6 +53,20 @@ test('buildMitmArgs emits one script flag per path and all configured options', 
   );
 });
 
+test('buildMitmArgs disables upstream certificate verification by default', () => {
+  assert.deepEqual(
+    buildMitmArgs({ listenPort: 8080 }),
+    ['--listen-port', '8080', '--ssl-insecure']
+  );
+});
+
+test('buildMitmArgs honors an explicit upstream certificate verification setting', () => {
+  assert.deepEqual(
+    buildMitmArgs({ listenPort: 8080, sslInsecure: false }),
+    ['--listen-port', '8080']
+  );
+});
+
 test('mitm configuration survives write, read, and reset', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'android-emu-mitm-test-'));
   const configPath = path.join(dir, 'mitm-config.json');

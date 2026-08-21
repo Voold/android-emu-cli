@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import { run } from './sdk.js';
 import { SdkError } from './errors.js';
+import { buildRelayRequestPath, startDevToolsRelay } from './devtoolsRelay.js';
 
 export function parseAdbDevices(output) {
   return output
@@ -41,11 +43,16 @@ export function parseDevToolsTargets(json) {
     }));
 }
 
-export function buildDevToolsUrl(port, target) {
-  if (target.devtoolsFrontendUrl) return target.devtoolsFrontendUrl;
+export function buildDevToolsUrl(port, target, token) {
+  const relayTarget = `127.0.0.1:${port}${buildRelayRequestPath(target.webSocketDebuggerUrl, token)}`;
+  if (target.devtoolsFrontendUrl) {
+    const frontendUrl = new URL(target.devtoolsFrontendUrl);
+    frontendUrl.searchParams.delete('wss');
+    frontendUrl.searchParams.set('ws', relayTarget);
+    return frontendUrl.toString();
+  }
 
-  const socketUrl = new URL(target.webSocketDebuggerUrl);
-  return `devtools://devtools/bundled/inspector.html?ws=localhost:${port}${socketUrl.pathname}${socketUrl.search}`;
+  return `devtools://devtools/bundled/inspector.html?ws=${relayTarget}`;
 }
 
 export function listRunningEmulators() {
@@ -56,18 +63,23 @@ export function listRunningEmulators() {
   }));
 }
 
-export async function listDeviceTargets(serial) {
-  const unixSockets = run('adb', ['-s', serial, 'shell', 'cat', '/proc/net/unix']);
+export async function listDeviceTargets(serial, dependencies = {}) {
+  const runCommand = dependencies.runCommand ?? run;
+  const fetchImpl = dependencies.fetchImpl ?? fetch;
+  const timeoutMs = dependencies.timeoutMs ?? 2_000;
+  const unixSockets = runCommand('adb', ['-s', serial, 'shell', 'cat', '/proc/net/unix']);
   const sockets = parseDevToolsSockets(unixSockets);
   const result = [];
 
   for (const socket of sockets) {
-    const portText = run('adb', ['-s', serial, 'forward', 'tcp:0', `localabstract:${socket}`]).trim();
+    const portText = runCommand('adb', ['-s', serial, 'forward', 'tcp:0', `localabstract:${socket}`]).trim();
     const port = Number(portText);
     if (!Number.isInteger(port) || port <= 0) continue;
 
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      const response = await fetchImpl(`http://127.0.0.1:${port}/json/list`, {
+        signal: AbortSignal.timeout(timeoutMs),
+      });
       if (!response.ok) continue;
       const targets = parseDevToolsTargets(await response.text());
       result.push(...targets.map((target) => ({ ...target, port, socket })));
@@ -79,6 +91,20 @@ export async function listDeviceTargets(serial) {
   return result;
 }
 
-export function openDevTools(target) {
-  run('open', ['-a', 'Google Chrome', buildDevToolsUrl(target.port, target)]);
+export async function openDevTools(target) {
+  const token = randomBytes(24).toString('hex');
+  const relay = await startDevToolsRelay({
+    upstreamPort: target.port,
+    targetWebSocketUrl: target.webSocketDebuggerUrl,
+    token,
+  });
+
+  try {
+    run('open', ['-a', 'Google Chrome', buildDevToolsUrl(relay.port, target, token)]);
+  } catch (error) {
+    await relay.close();
+    throw error;
+  }
+
+  return relay;
 }

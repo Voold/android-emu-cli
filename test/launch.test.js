@@ -42,7 +42,7 @@ test('buildTerminalScript writes its owned PID marker immediately before exec', 
   );
 });
 
-test('createTerminalWindow captures the exact created Terminal window id and tty without tab id', () => {
+test('createTerminalWindow resolves the created window by the returned tab TTY', () => {
   const calls = [];
   const writes = [];
 
@@ -65,7 +65,13 @@ test('createTerminalWindow captures the exact created Terminal window id and tty
   assert.equal(writes.length, 1);
   assert.match(writes[0][1], /'\/tmp\/addon "quoted"\.py'/);
   assert.match(calls[0], /set terminalTab to do script "bash '\/tmp\/android-emu-mitm\.sh'"/);
-  assert.match(calls[0], /return \(id of window of terminalTab\) & ":" & \(tty of terminalTab\)/);
+  assert.match(calls[0], /set terminalTty to tty of terminalTab/);
+  assert.match(calls[0], /repeat with terminalWindow in windows/);
+  assert.match(calls[0], /repeat with candidateTab in tabs of terminalWindow/);
+  assert.match(calls[0], /if \(tty of candidateTab\) is terminalTty then/);
+  assert.match(calls[0], /return \(id of terminalWindow as text\) & ":" & terminalTty/);
+  assert.doesNotMatch(calls[0], /window of terminalTab/);
+  assert.doesNotMatch(calls[0], /front window/);
   assert.doesNotMatch(calls[0], /\bid of terminalTab\b/);
 });
 

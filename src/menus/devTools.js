@@ -71,7 +71,7 @@ export async function devToolsMenu() {
   }
 
   try {
-    openDevTools(target);
+    await openDevTools(target);
   } catch (err) {
     ui.error(`Не удалось открыть Google Chrome: ${err.message}`);
     await ui.pause();

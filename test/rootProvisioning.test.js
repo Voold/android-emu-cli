@@ -335,6 +335,26 @@ test('active APEX provisioning keeps the last zygote bind error in its bounded f
   );
 });
 
+test('active APEX idempotent provisioning refuses changed:false when a zygote mount is stale', async () => {
+  await assert.rejects(
+    () => provisionRootCertificates(
+      { serial: 'emulator-5554', certificates: [certificate] },
+      {
+        getDeviceProperty: async ({ key }) => key === 'ro.build.version.sdk' ? '34' : 'false',
+        listSystemCertificateNames: async () => [],
+        listApexCertificateNames: async () => ['5a1c3d2e.0'],
+        readStoreCertificate: async () => ROOT_BYTES,
+        getAndroidCertificateHash: async () => '5a1c3d2e',
+        run: async () => '',
+        waitForBoot: async () => {},
+        findZygotePids: async () => [101],
+        verifyApexMount: async ({ pid }) => pid === null,
+      }
+    ),
+    /zygote|namespace/i
+  );
+});
+
 test('active APEX default mount verification uses stat device and inode in host and zygote namespaces', async () => {
   const commands = [];
   const result = await provisionRootCertificates(
@@ -360,7 +380,7 @@ test('active APEX default mount verification uses stat device and inode in host 
   ]);
 });
 
-test('active APEX default file operations use only the injected runner and clean/finalize the bounded directory', async () => {
+test('active APEX default file operations keep every remote operation in argv without sh -c', async () => {
   const commands = [];
   const result = await provisionRootCertificates(
     { serial: 'emulator-5554', certificates: [certificate] },
@@ -378,9 +398,16 @@ test('active APEX default file operations use only the injected runner and clean
     }
   );
   assert.equal(result.store, 'apex');
-  assert.equal(commands.some((args) => args.includes('rm') && args.includes(APEX_MERGED_DIRECTORY_PLACEHOLDER)), true);
-  assert.equal(commands.some((args) => args.includes('chown')), true);
-  assert.equal(commands.some((args) => args.some((arg) => String(arg).includes('chcon'))), true);
+  assert.equal(commands.some((args) => args.includes('sh') || args.includes('-c')), false);
+  assert.deepEqual(commands.filter((args) => ['rm', 'mkdir', 'cp', 'chown', 'chmod', 'chcon'].some((command) => args.includes(command))), [
+    ['-s', 'emulator-5554', 'shell', 'rm', '-rf', APEX_MERGED_DIRECTORY_PLACEHOLDER],
+    ['-s', 'emulator-5554', 'shell', 'mkdir', '-p', APEX_MERGED_DIRECTORY_PLACEHOLDER],
+    ['-s', 'emulator-5554', 'shell', 'cp', '-Rfp', '/apex/com.android.conscrypt/cacerts/.', `${APEX_MERGED_DIRECTORY_PLACEHOLDER}/`],
+    ['-s', 'emulator-5554', 'shell', 'chown', '-R', '0:0', APEX_MERGED_DIRECTORY_PLACEHOLDER],
+    ['-s', 'emulator-5554', 'shell', 'chmod', '-R', 'u=rwX,go=rX', APEX_MERGED_DIRECTORY_PLACEHOLDER],
+    ['-s', 'emulator-5554', 'shell', 'chmod', '0755', APEX_MERGED_DIRECTORY_PLACEHOLDER],
+    ['-s', 'emulator-5554', 'shell', 'chcon', '-R', 'u:object_r:system_file:s0', APEX_MERGED_DIRECTORY_PLACEHOLDER],
+  ]);
 });
 
 const APEX_MERGED_DIRECTORY_PLACEHOLDER = '/data/local/tmp/android-emu-apex-cacerts';

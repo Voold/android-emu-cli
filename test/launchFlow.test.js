@@ -8,6 +8,7 @@ import {
   resolveParameterizedLaunch,
   resolveLaunchRequest,
 } from '../src/launchFlow.js';
+import * as launchFlow from '../src/launchFlow.js';
 
 test('plain launch combines saved defaults, inherited MITM and parsed existing-AVD capability', () => {
   assert.deepEqual(
@@ -128,6 +129,17 @@ test('recovery never offers a duplicate direct launch after the emulator stage',
   );
 });
 
+test('recovery menu title keeps the original launch error visible after redraw', () => {
+  assert.equal(typeof launchFlow.formatLaunchRecoveryTitle, 'function');
+  assert.equal(
+    launchFlow.formatLaunchRecoveryTitle(
+      'Этап "provision": cp: missing destination file operand',
+      'Эмулятор мог успеть запуститься.'
+    ),
+    'Восстановление запуска\n\nОшибка:\nЭтап "provision": cp: missing destination file operand\n\nВнимание:\nЭмулятор мог успеть запуститься.'
+  );
+});
+
 test('provision results remain explicit about manual Magisk and root state', () => {
   assert.match(formatProvisionResult({ state: 'current' }, 'magisk-required'), /проверен/i);
   assert.match(formatProvisionResult({ state: 'missing', instructions: { steps: ['Откройте Magisk'] } }, 'magisk-required'), /Откройте Magisk/);
@@ -139,4 +151,30 @@ test('provision results remain explicit about manual Magisk and root state', () 
     formatProvisionResult({ state: 'missing', instructions: { notice: 'Установите модуль вручную', steps: ['Откройте Magisk'] } }, 'magisk-required'),
     /Установите модуль вручную/iu
   );
+});
+
+test('resolveMitmRuntime reuses a listener without prompting and asks only when none is running', async () => {
+  assert.equal(typeof launchFlow.resolveMitmRuntime, 'function');
+  let prompts = 0;
+  const running = { pid: 41, name: 'mitmproxy', port: 8081 };
+
+  assert.deepEqual(await launchFlow.resolveMitmRuntime({ mitmEnabled: false, configuredPort: 8080 }, {
+    findRunningMitm: () => { throw new Error('disabled MITM must not inspect processes'); },
+    confirmStart: async () => { throw new Error('disabled MITM must not prompt'); },
+  }), { mode: 'direct' });
+
+  assert.deepEqual(await launchFlow.resolveMitmRuntime({ mitmEnabled: true, configuredPort: 8080 }, {
+    findRunningMitm: () => running,
+    confirmStart: async () => { throw new Error('running MITM must not prompt'); },
+  }), { mode: 'reuse', existingMitm: running });
+
+  assert.deepEqual(await launchFlow.resolveMitmRuntime({ mitmEnabled: true, configuredPort: 8080 }, {
+    findRunningMitm: () => null,
+    confirmStart: async () => { prompts += 1; return true; },
+  }), { mode: 'start' });
+  assert.deepEqual(await launchFlow.resolveMitmRuntime({ mitmEnabled: true, configuredPort: 8080 }, {
+    findRunningMitm: () => null,
+    confirmStart: async () => { prompts += 1; return false; },
+  }), { mode: 'direct' });
+  assert.equal(prompts, 2);
 });

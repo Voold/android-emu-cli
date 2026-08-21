@@ -5,7 +5,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { SdkError } from './errors.js';
 import { listRunningEmulators } from './devtools.js';
-import { createTerminalWindow, openTerminalTab, readTerminalTabOutput } from './launch.js';
+import { createTerminalWindow, readTerminalTabOutput } from './launch.js';
 import { buildMitmArgs, findAvailablePort, validateScriptPaths } from './mitm.js';
 import { assertSdkAvailable, run } from './sdk.js';
 import { loadCertificateRegistry } from './certificates.js';
@@ -143,15 +143,21 @@ export async function waitForOwnedPort({ host = '127.0.0.1', port, markerPath, w
   }
 }
 
-function validateStackConfig({ avdName, mitmConfig = {}, capability = 'unknown' }) {
+function validateStackConfig({ avdName, mitmConfig = {}, capability = 'unknown', existingMitm }) {
   if (!String(avdName || '').trim()) throw new SdkError('Не указано имя AVD для запуска.');
   if (!['root-capable', 'magisk-required', 'unknown'].includes(capability)) {
     throw new SdkError(`Неизвестная capability образа: ${capability}.`);
   }
+  if (existingMitm && (
+    !Number.isInteger(existingMitm.pid) || existingMitm.pid <= 0
+    || !Number.isInteger(existingMitm.port) || existingMitm.port < 1 || existingMitm.port > 65535
+  )) {
+    throw new SdkError('Некорректные данные запущенного процесса mitmproxy.');
+  }
   if (mitmConfig.listenPort !== undefined && (!Number.isInteger(mitmConfig.listenPort) || mitmConfig.listenPort < 1 || mitmConfig.listenPort > 65535)) {
     throw new SdkError('Некорректный порт mitmproxy.');
   }
-  buildMitmArgs(mitmConfig);
+  if (!existingMitm) buildMitmArgs(mitmConfig);
 }
 
 function validateStackTools() {
@@ -237,6 +243,7 @@ export function buildEffectiveEmulatorArgs({ avdName, baseArgs = [], port, capab
 export async function launchStack(options, dependencies = {}) {
   const emit = options.onStage ?? (() => {});
   const mitmConfig = options.mitmConfig ?? {};
+  const existingMitm = options.existingMitm ?? null;
   const capability = options.capability ?? 'unknown';
   const host = options.proxyHost ?? '127.0.0.1';
   const validateConfig = dependencies.validateConfig ?? validateStackConfig;
@@ -252,7 +259,6 @@ export async function launchStack(options, dependencies = {}) {
   const checkPidOwnsPort = dependencies.doesPidOwnPort ?? doesPidOwnPort;
   const getTerminalOutput = dependencies.readTerminalTabOutput ?? readTerminalTabOutput;
   const deletePidMarker = dependencies.removePidMarker ?? removePidMarker;
-  const openTab = dependencies.openTerminalTab ?? openTerminalTab;
   const findSerial = dependencies.discoverSerial ?? discoverSelectedSerial;
   const waitBoot = dependencies.waitForBoot ?? waitForBoot;
   const loadRegistry = dependencies.loadCertificateRegistry ?? loadCertificateRegistry;
@@ -302,44 +308,53 @@ export async function launchStack(options, dependencies = {}) {
         `AVD "${options.avdName}" уже запущен${existing.serial ? ` (${existing.serial})` : ''}. Закройте существующий эмулятор перед запуском стека.`
       );
     }
-    validateScripts(mitmConfig.scripts ?? []);
+    if (!existingMitm) validateScripts(mitmConfig.scripts ?? []);
     validateTools();
     certificates = await loadRegistry({ includeMitm: true });
   });
 
-  const port = await runStage('port', emit, () => getPort(mitmConfig.listenPort ?? 8080, host));
-  const mitmArgs = makeMitmArgs({ ...mitmConfig, listenPort: port });
-  const markerPath = makePidMarkerPath();
-  let terminal;
-  try {
-    terminal = await runStage('mitm', emit, () => createWindow(
-      'mitmproxy',
-      mitmArgs,
-      'android-emu-mitm',
-      { pidMarkerPath: markerPath }
-    ));
-    await runStage('mitm-ready', emit, () => waitForOwnedPort({
-      host,
-      port,
-      markerPath,
-      windowId: terminal.windowId,
-      tty: terminal.tty,
-      timeoutMs: options.proxyTimeoutMs ?? DEFAULT_TIMEOUT_MS,
-      intervalMs: options.pollIntervalMs ?? DEFAULT_INTERVAL_MS,
-    }, {
-      now: dependencies.now,
-      sleep: dependencies.sleep,
-      readPidMarker: getPidMarker,
-      isProcessAlive: checkProcessAlive,
-      doesPidOwnPort: checkPidOwnsPort,
-      readTerminalTabOutput: getTerminalOutput,
-    }));
-  } finally {
-    await deletePidMarker(markerPath);
+  let port;
+  let terminal = null;
+  if (existingMitm) {
+    port = await runStage('mitm-reuse', emit, async () => {
+      if (!await checkPidOwnsPort(existingMitm.pid, existingMitm.port, host)) {
+        throw new SdkError(`Процесс mitm PID ${existingMitm.pid} больше не слушает порт ${existingMitm.port}.`);
+      }
+      return existingMitm.port;
+    });
+  } else {
+    port = await runStage('port', emit, () => getPort(mitmConfig.listenPort ?? 8080, host));
+    const mitmArgs = makeMitmArgs({ ...mitmConfig, listenPort: port });
+    const markerPath = makePidMarkerPath();
+    try {
+      terminal = await runStage('mitm', emit, () => createWindow(
+        'mitmproxy',
+        mitmArgs,
+        'android-emu-mitm',
+        { pidMarkerPath: markerPath }
+      ));
+      await runStage('mitm-ready', emit, () => waitForOwnedPort({
+        host,
+        port,
+        markerPath,
+        windowId: terminal.windowId,
+        tty: terminal.tty,
+        timeoutMs: options.proxyTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+        intervalMs: options.pollIntervalMs ?? DEFAULT_INTERVAL_MS,
+      }, {
+        now: dependencies.now,
+        sleep: dependencies.sleep,
+        readPidMarker: getPidMarker,
+        isProcessAlive: checkProcessAlive,
+        doesPidOwnPort: checkPidOwnsPort,
+        readTerminalTabOutput: getTerminalOutput,
+      }));
+    } finally {
+      await deletePidMarker(markerPath);
+    }
   }
-  const { windowId } = terminal;
-  await runStage('emulator', emit, () => openTab(
-    windowId,
+  const windowId = terminal?.windowId ?? null;
+  await runStage('emulator', emit, () => createWindow(
     'emulator',
     buildEffectiveEmulatorArgs({
       avdName: options.avdName,

@@ -6,14 +6,15 @@ import { getLaunchDefaults, setLaunchDefaults, clearLaunchDefaults } from '../la
 import { getAvdSettings, getGlobalSettings, setAvdSettings, clearAvdSettings } from '../settings.js';
 import { readMitmConfig } from '../mitm.js';
 import { launchStack } from '../launchStack.js';
-import { buildConfirmedParameterizedPersistence, formatProvisionResult, getLaunchRecovery, getLaunchRecoveryWarning, resolveLaunchRequest, resolveParameterizedLaunch } from '../launchFlow.js';
+import { buildConfirmedParameterizedPersistence, formatLaunchRecoveryTitle, formatProvisionResult, getLaunchRecovery, getLaunchRecoveryWarning, resolveLaunchRequest, resolveMitmRuntime, resolveParameterizedLaunch } from '../launchFlow.js';
 import { prompt } from '../prompt.js';
 import { clearDeletedAvdMetadata } from '../avdLifecycle.js';
 import { selectMenu, checkNav, clearScreen, BACK } from '../menu.js';
 
 const STAGE_TITLES = {
   validate: 'проверка настроек', port: 'поиск свободного порта', mitm: 'запуск mitmproxy',
-  'mitm-ready': 'ожидание mitmproxy', emulator: 'запуск эмулятора', serial: 'поиск ADB-устройства',
+  'mitm-ready': 'ожидание mitmproxy', 'mitm-reuse': 'использование запущенного mitmproxy',
+  emulator: 'запуск эмулятора', serial: 'поиск ADB-устройства',
   boot: 'ожидание загрузки Android', provision: 'проверка сертификатов', ready: 'стек готов',
 };
 
@@ -45,11 +46,9 @@ function showStage(event) {
 async function chooseRecovery(error, request) {
   const stage = stageFromError(error);
   const recovery = getLaunchRecovery(stage, error.message);
-  ui.error(error.message);
   const warning = getLaunchRecoveryWarning(recovery);
-  if (warning) ui.warn(warning);
   const choice = checkNav(await selectMenu({
-    title: 'Восстановление запуска',
+    title: formatLaunchRecoveryTitle(error.message, warning),
     choices: recovery.actions.map((action) => ({
       value: action,
       name: action === 'retry' ? 'Повторить MITM-запуск' : action === 'direct-once' ? 'Запустить без MITM один раз' : 'Отмена',
@@ -79,16 +78,36 @@ export async function launchDevice(name, { oneOffMitm, parsedSystemImagePackage,
   while (true) {
     clearScreen();
     try {
-      if (!request.mitmEnabled) {
+      const mitmConfig = safeMitmConfig();
+      const runtime = await resolveMitmRuntime({
+        mitmEnabled: request.mitmEnabled,
+        configuredPort: mitmConfig.listenPort ?? 8080,
+      }, {
+        confirmStart: async () => {
+          const { startMitm } = await prompt([{
+            type: 'confirm',
+            name: 'startMitm',
+            message: 'mitmproxy не запущен. Запустить его для этого устройства?',
+            default: true,
+          }]);
+          return startMitm;
+        },
+      });
+
+      if (runtime.mode === 'direct') {
         launchEmulator(request.emulatorArgs);
         ui.success(`Эмулятор "${name}" запущен без MITM в новом окне Terminal.`);
         return { direct: true };
+      }
+      if (runtime.mode === 'reuse') {
+        ui.info(`Используется запущенный ${runtime.existingMitm.name} PID ${runtime.existingMitm.pid}, порт ${runtime.existingMitm.port}.`);
       }
       const result = await launchStack({
         avdName: name,
         capability: request.capability,
         emulatorArgs: request.emulatorArgs,
-        mitmConfig: safeMitmConfig(),
+        mitmConfig,
+        existingMitm: runtime.existingMitm,
         onStage: showStage,
       });
       ui.success(`MITM-стек для "${name}" готов. Порт: ${result.port}.`);

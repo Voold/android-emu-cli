@@ -10,6 +10,11 @@ import { launchDevice } from './myDevices.js';
 import { prompt } from '../prompt.js';
 import { selectMenu, checkNav, clearScreen, BACK, GoToMainMenu } from '../menu.js';
 
+export function reportAvdCreationFailure(sp, error) {
+  if (error?.avdCreated === true) return sp.warn('Устройство создано, но его настройка не завершена.');
+  return sp.fail('Не удалось создать устройство.');
+}
+
 async function pickDeviceProfile() {
   const mode = checkNav(
     await selectMenu({
@@ -197,7 +202,7 @@ export async function createDeviceMenu() {
       saveMetadata: (name, metadata) => setLaunchDefaults(name, metadata),
     });
   } catch (err) {
-    sp.fail('Не удалось создать устройство.');
+    reportAvdCreationFailure(sp, err);
     ui.error(err.message);
     await ui.pause();
     return;

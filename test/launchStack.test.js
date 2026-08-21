@@ -54,7 +54,10 @@ test('launchStack prepares a Magisk module without root provisioning and returns
       listRunningEmulators: () => [],
       findAvailablePort: async () => 8081,
       createPidMarkerPath: () => '/tmp/mitm.pid',
-      createTerminalWindow: () => ({ windowId: 731, tty: '/dev/ttys731' }),
+      createTerminalWindow: (command, args) => {
+        if (command === 'emulator') calls.push(['emulator', args]);
+        return { windowId: 731, tty: '/dev/ttys731' };
+      },
       readPidMarker: async () => 4321,
       isProcessAlive: async () => true,
       doesPidOwnPort: async () => true,
@@ -208,7 +211,7 @@ test('launchStack rejects every custom mitm port override before opening Termina
   }
 });
 
-test('launchStack preserves an occupied port owner, orders stages, and passes the dynamic proxy to the emulator tab', async () => {
+test('launchStack preserves an occupied port owner, orders stages, and passes the dynamic proxy to a new emulator window', async () => {
   const events = [];
   const calls = [];
   let now = 0;
@@ -232,8 +235,10 @@ test('launchStack preserves an occupied port owner, orders stages, and passes th
       buildMitmArgs: (config) => ['--listen-port', String(config.listenPort)],
       createPidMarkerPath: () => '/tmp/mitm-731.pid',
       createTerminalWindow: (command, args, prefix, launchOptions) => {
-        calls.push(`create:${command}:${args.join(' ')}:${launchOptions.pidMarkerPath}`);
-        return { windowId: 731, tty: '/dev/ttys731' };
+        calls.push(`create:${command}:${args.join(' ')}:${launchOptions?.pidMarkerPath ?? 'none'}`);
+        return command === 'mitmproxy'
+          ? { windowId: 731, tty: '/dev/ttys731' }
+          : { windowId: 732, tty: '/dev/ttys732' };
       },
       waitForPort: async () => {},
       readPidMarker: async () => {
@@ -255,7 +260,7 @@ test('launchStack preserves an occupied port owner, orders stages, and passes th
         calls.push(`sleep:${ms}`);
         now += ms;
       },
-      openTerminalTab: (windowId, command, args) => calls.push(`tab:${windowId}:${command}:${args.join(' ')}`),
+      openTerminalTab: () => calls.push('unexpected-existing-window-launch'),
       discoverSerial: async (avdName) => {
         calls.push(`serial:${avdName}`);
         return 'emulator-5554';
@@ -281,7 +286,7 @@ test('launchStack preserves an occupied port owner, orders stages, and passes th
     'alive:4321',
     'owns:4321:8081',
     'remove-marker:/tmp/mitm-731.pid',
-    'tab:731:emulator:-avd Pixel_8 -http-proxy http://127.0.0.1:8081 -writable-system -no-snapshot',
+    'create:emulator:-avd Pixel_8 -http-proxy http://127.0.0.1:8081 -writable-system -no-snapshot:none',
     'serial:Pixel_8',
     'boot:emulator-5554',
     'provision:emulator-5554:root-capable',
@@ -297,6 +302,53 @@ test('launchStack preserves an occupied port owner, orders stages, and passes th
     'provision:start', 'provision:success',
     'ready:success',
   ]);
+});
+
+test('launchStack reuses an existing mitm listener without starting another proxy', async () => {
+  const calls = [];
+  const events = [];
+  const result = await launchStack(
+    {
+      avdName: 'Pixel_8',
+      capability: 'unknown',
+      existingMitm: { pid: 9001, name: 'mitmproxy', port: 8181 },
+      mitmConfig: { listenPort: 8080, scripts: ['/missing/saved-addon.py'] },
+      onStage: (event) => events.push(`${event.stage}:${event.status}`),
+    },
+    {
+      validateConfig: () => calls.push('validate-config'),
+      validateScripts: () => { throw new Error('must not validate scripts for a reused process'); },
+      validateTools: () => calls.push('validate-tools'),
+      listRunningEmulators: () => [],
+      loadCertificateRegistry: () => [],
+      findAvailablePort: () => { throw new Error('must not find another port'); },
+      createPidMarkerPath: () => { throw new Error('must not create a marker'); },
+      doesPidOwnPort: (pid, port) => { calls.push(`owns:${pid}:${port}`); return true; },
+      createTerminalWindow: (command, args) => {
+        calls.push(`create:${command}:${args.join(' ')}`);
+        return { windowId: 732, tty: '/dev/ttys732' };
+      },
+      discoverSerial: async () => 'emulator-5554',
+      waitForBoot: async () => {},
+    }
+  );
+
+  assert.deepEqual(result, {
+    windowId: null,
+    port: 8181,
+    serial: 'emulator-5554',
+    capability: 'unknown',
+    provision: { changed: false, skipped: true },
+  });
+  assert.deepEqual(calls, [
+    'validate-config',
+    'validate-tools',
+    'owns:9001:8181',
+    'create:emulator:-avd Pixel_8 -http-proxy http://127.0.0.1:8181',
+  ]);
+  assert.ok(events.includes('mitm-reuse:start'));
+  assert.ok(events.includes('mitm-reuse:success'));
+  assert.equal(events.some((event) => event.startsWith('mitm:')), false);
 });
 
 test('launchStack provisions public certificates by default only for root-capable images', async () => {
@@ -383,7 +435,7 @@ test('launchStack keeps initial boot waiting separate from the provisioning wait
   assert.notEqual(capturedWaiters[0], initialWaitForBoot);
 });
 
-test('launchStack reports a stable stage error when the captured Terminal window vanishes', async () => {
+test('launchStack reports a stable stage error when the emulator Terminal window cannot open', async () => {
   const events = [];
 
   await assert.rejects(
@@ -397,22 +449,26 @@ test('launchStack reports a stable stage error when the captured Terminal window
         findAvailablePort: async () => 8081,
         buildMitmArgs: () => [],
         createPidMarkerPath: () => '/tmp/mitm-731.pid',
-        createTerminalWindow: () => ({ windowId: 731, tty: '/dev/ttys731' }),
+        createTerminalWindow: (command) => {
+          if (command === 'emulator') {
+            throw new SdkError('Не удалось открыть новое окно Terminal для эмулятора.');
+          }
+          return { windowId: 731, tty: '/dev/ttys731' };
+        },
         waitForPort: async () => {},
         readPidMarker: async () => 4321,
         isProcessAlive: async () => true,
         doesPidOwnPort: async () => true,
         removePidMarker: () => {},
-        openTerminalTab: () => { throw new SdkError('Окно Terminal с id 731 уже закрыто.'); },
       }
     ),
-    (error) => error instanceof SdkError && /^Этап "emulator"/.test(error.message) && /Окно Terminal/.test(error.message)
+    (error) => error instanceof SdkError && /^Этап "emulator"/.test(error.message) && /окно Terminal/.test(error.message)
   );
 
   assert.deepEqual(events.at(-1), {
     stage: 'emulator',
     status: 'error',
-    error: 'Окно Terminal с id 731 уже закрыто.',
+    error: 'Не удалось открыть новое окно Terminal для эмулятора.',
   });
 });
 

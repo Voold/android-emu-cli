@@ -7,6 +7,7 @@ import { prompt } from '../prompt.js';
 import { selectMenu, checkNav, clearScreen, BACK } from '../menu.js';
 import {
   buildMitmArgs,
+  isSslInsecureEnabled,
   launchMitm,
   parseCliArgs,
   readMitmConfig,
@@ -14,6 +15,8 @@ import {
   writeMitmConfig,
   isPortAvailable,
   findAvailablePort,
+  listMitmProcesses,
+  stopAllMitmProcesses,
 } from '../mitm.js';
 
 function expandPath(value) {
@@ -115,7 +118,7 @@ async function configureMitm(saved = {}) {
       name: 'presets',
       message: 'Готовые флаги:',
       choices: [
-        { name: 'Не проверять сертификат upstream (--ssl-insecure)', value: 'ssl-insecure', checked: saved.sslInsecure },
+        { name: 'Не проверять сертификат upstream (--ssl-insecure)', value: 'ssl-insecure', checked: isSslInsecureEnabled(saved) },
         { name: 'Разрешить внешние подключения (--set block_global=false)', value: 'allow-global', checked: saved.blockGlobal === false },
       ],
     },
@@ -196,6 +199,47 @@ async function startMitm(config) {
   await ui.pause();
 }
 
+export async function stopMitmProcessesAction(dependencies = {}) {
+  const listProcesses = dependencies.listProcesses ?? listMitmProcesses;
+  const stopProcesses = dependencies.stopProcesses ?? stopAllMitmProcesses;
+  const warn = dependencies.warn ?? ui.warn;
+  const success = dependencies.success ?? ui.success;
+  const showError = dependencies.error ?? ui.error;
+  const pause = dependencies.pause ?? ui.pause;
+  const clear = dependencies.clear ?? clearScreen;
+
+  try {
+    const processes = listProcesses();
+    clear();
+    if (processes.length === 0) {
+      warn('Запущенные процессы mitmproxy, mitmdump и mitmweb не найдены.');
+      await pause();
+      return { status: 'empty' };
+    }
+
+    const confirmStop = dependencies.confirmStop ?? (async (found) => {
+      const { confirmed } = await prompt([{
+        type: 'confirm',
+        name: 'confirmed',
+        message: `Завершить все процессы mitm текущего пользователя (${found.length})?`,
+        default: false,
+      }]);
+      return confirmed;
+    });
+    if (!await confirmStop(processes)) return { status: 'cancelled' };
+
+    const result = await stopProcesses();
+    success(`Завершено процессов mitm: ${result.terminated}. Принудительно: ${result.forced}.`);
+    await pause();
+    return { status: 'stopped', ...result };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    showError(`Не удалось завершить процессы mitm: ${message}`);
+    await pause();
+    return { status: 'error', message };
+  }
+}
+
 export async function mitmMenu() {
   while (true) {
     const saved = readMitmConfig();
@@ -205,6 +249,7 @@ export async function mitmMenu() {
         choices: [
           ...(saved ? [{ name: 'Запустить', value: 'run' }] : []),
           { name: 'Настроить и запустить', value: 'configure' },
+          { name: 'Убить все процессы mitm', value: 'kill-all' },
           ...(saved ? [{ name: 'Сбросить настройки', value: 'reset' }] : []),
         ],
       })
@@ -218,6 +263,10 @@ export async function mitmMenu() {
     if (action === 'configure') {
       const config = await configureMitm(saved || {});
       await startMitm(config);
+      continue;
+    }
+    if (action === 'kill-all') {
+      await stopMitmProcessesAction();
       continue;
     }
 

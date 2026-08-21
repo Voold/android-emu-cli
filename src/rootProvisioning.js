@@ -301,7 +301,7 @@ async function resolveApexCertificateNames({ serial, certificates, systemNames, 
 async function defaultPrepareApexMergedStore({ serial, run }) {
   await run('adb', adbArgs(serial, ['shell', 'rm', '-rf', APEX_MERGED_DIRECTORY]));
   await run('adb', adbArgs(serial, ['shell', 'mkdir', '-p', APEX_MERGED_DIRECTORY]));
-  await run('adb', adbArgs(serial, ['shell', 'sh', '-c', `cp -fp ${APEX_CERTIFICATE_DIRECTORY}/* ${APEX_MERGED_DIRECTORY}/`]));
+  await run('adb', adbArgs(serial, ['shell', 'cp', '-Rfp', `${APEX_CERTIFICATE_DIRECTORY}/.`, `${APEX_MERGED_DIRECTORY}/`]));
 }
 
 async function defaultPushApexCertificate({ serial, certificate, run }) {
@@ -309,9 +309,10 @@ async function defaultPushApexCertificate({ serial, certificate, run }) {
 }
 
 async function defaultFinalizeApexMergedStore({ serial, run }) {
-  await run('adb', adbArgs(serial, ['shell', 'chown', '0:0', APEX_MERGED_DIRECTORY]));
+  await run('adb', adbArgs(serial, ['shell', 'chown', '-R', '0:0', APEX_MERGED_DIRECTORY]));
+  await run('adb', adbArgs(serial, ['shell', 'chmod', '-R', 'u=rwX,go=rX', APEX_MERGED_DIRECTORY]));
   await run('adb', adbArgs(serial, ['shell', 'chmod', '0755', APEX_MERGED_DIRECTORY]));
-  await run('adb', adbArgs(serial, ['shell', 'sh', '-c', `chown 0:0 ${APEX_MERGED_DIRECTORY}/* && chmod 0644 ${APEX_MERGED_DIRECTORY}/* && chcon u:object_r:system_file:s0 ${APEX_MERGED_DIRECTORY} ${APEX_MERGED_DIRECTORY}/*`]));
+  await run('adb', adbArgs(serial, ['shell', 'chcon', '-R', 'u:object_r:system_file:s0', APEX_MERGED_DIRECTORY]));
 }
 
 async function defaultBindApexStore({ serial, run }) {
@@ -340,24 +341,33 @@ async function defaultVerifyApexMount({ serial, pid, run }) {
 async function provisionApexCertificates({ serial, certificates, systemNames, apexNames }, dependencies) {
   const resolved = await resolveApexCertificateNames({ serial, certificates, systemNames, apexNames }, dependencies);
   const missing = resolved.filter((certificate) => certificate.needsInstall);
-  if (missing.length === 0) return { changed: false, installed: [], store: 'apex' };
+  const run = dependencies.run ?? defaultRun;
+  const waitForBoot = dependencies.waitForBoot ?? ((candidateSerial) => waitForDeviceBoot(candidateSerial, { run, now: dependencies.now, sleep: dependencies.sleep, timeoutMs: dependencies.timeoutMs, intervalMs: dependencies.intervalMs }));
+  const findZygotes = dependencies.findZygotePids ?? defaultFindZygotePids;
+  const verifyMount = dependencies.verifyApexMount ?? defaultVerifyApexMount;
+  await run('adb', adbArgs(serial, ['root']));
+  await waitForBoot(serial);
+  if (missing.length === 0) {
+    const pids = await findZygotes({ serial, run });
+    const mounts = pids.length > 0
+      ? await Promise.all([verifyMount({ serial, pid: null, run }), ...pids.map((pid) => verifyMount({ serial, pid, run }))])
+      : [];
+    if (mounts.length === 0 || !mounts.every(Boolean)) {
+      throw new SdkError('Этап "apex-namespace": сохранённые APEX CA найдены, но bind-mount не подтверждён в host и каждом zygote namespace. Готовность не подтверждена.');
+    }
+    return { changed: false, installed: [], store: 'apex' };
+  }
   const prepare = dependencies.prepareApexMergedStore ?? defaultPrepareApexMergedStore;
   const push = dependencies.pushApexCertificate ?? defaultPushApexCertificate;
   const finalize = dependencies.finalizeApexMergedStore ?? defaultFinalizeApexMergedStore;
   const bindHost = dependencies.bindApexStore ?? defaultBindApexStore;
-  const findZygotes = dependencies.findZygotePids ?? defaultFindZygotePids;
   const bindZygote = dependencies.bindApexInNamespace ?? defaultBindApexInNamespace;
-  const verifyMount = dependencies.verifyApexMount ?? defaultVerifyApexMount;
   const verifyCertificate = dependencies.verifyActiveCertificate ?? (async ({ certificate }) => {
     const content = await (dependencies.readStoreCertificate ?? (async ({ path }) => defaultReadSystemCertificate({ serial, path })))({
       serial, certificate, path: `${APEX_CERTIFICATE_DIRECTORY}/${certificate.androidName}`,
     });
     return fingerprintCertificateBytes(content, certificate.id) === certificate.fingerprint.toUpperCase();
   });
-  const run = dependencies.run ?? defaultRun;
-  const waitForBoot = dependencies.waitForBoot ?? ((candidateSerial) => waitForDeviceBoot(candidateSerial, { run, now: dependencies.now, sleep: dependencies.sleep, timeoutMs: dependencies.timeoutMs, intervalMs: dependencies.intervalMs }));
-  await run('adb', adbArgs(serial, ['root']));
-  await waitForBoot(serial);
   await prepare({ serial, certificates: resolved, apexNames, run });
   for (const certificate of missing) await push({ serial, certificate, run });
   await finalize({ serial, certificates: resolved, run });

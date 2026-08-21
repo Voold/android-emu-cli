@@ -84,7 +84,15 @@ export function createTerminalWindow(command, args, prefix = 'android-emu-cli', 
   const script = [
     'tell application "Terminal"',
     `set terminalTab to do script ${appleScriptString(shellCommand)}`,
-    'return (id of window of terminalTab) & ":" & (tty of terminalTab)',
+    'set terminalTty to tty of terminalTab',
+    'repeat with terminalWindow in windows',
+    'repeat with candidateTab in tabs of terminalWindow',
+    'if (tty of candidateTab) is terminalTty then',
+    'return (id of terminalWindow as text) & ":" & terminalTty',
+    'end if',
+    'end repeat',
+    'end repeat',
+    'error "Не удалось найти окно созданной вкладки Terminal"',
     'end tell',
   ].join('\n');
   const result = deps.runAppleScript(script);
